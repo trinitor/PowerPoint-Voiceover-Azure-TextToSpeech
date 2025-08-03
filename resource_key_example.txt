@@ -1,0 +1,1 @@
+123_put_your_azure_resource_key_into_the_file_in one_line_only_no_line_break_4567890

@@ -9,9 +9,9 @@ param(
     [string]$OutputFolder = "output"
 )
 
-$PptxFile       = (Resolve-Path $PptxFile).Path
-$SsmlTemplate   = (Resolve-Path $SsmlTemplate).Path
-$ResourceKeyPath= (Resolve-Path $ResourceKeyPath).Path
+$PptxFile        = (Resolve-Path $PptxFile).Path
+$SsmlTemplate    = (Resolve-Path $SsmlTemplate).Path
+$ResourceKeyPath = (Resolve-Path $ResourceKeyPath).Path
 
 $AudioOutputDir = Join-Path $OutputFolder "voice"
 $DebugOutputDir = Join-Path $OutputFolder "debug"
@@ -76,7 +76,9 @@ function Get-SlideNotes {
 function Convert-TextToSSML {
     param([string]$Text, [string]$TemplateFile)
     $template = Get-Content -Path $TemplateFile -Raw -Encoding UTF8
-    return $template.Replace('$TEXT', $Text)
+    $ssml = $template.Replace('$TEXT', $Text)
+    Write-Host "Slide $i SSML: '$ssml'"
+    return $ssml
 }
 
 function Convert-SSMLToAudio {
@@ -99,9 +101,15 @@ function Convert-SSMLToAudio {
         "User-Agent"                = "AzureTTSClient"
     }
 
-    Invoke-RestMethod -Uri $Endpoint -Method Post -Headers $headers -Body $SsmlContent -OutFile $audioFile -ErrorAction Stop
+    $utf8Body = [System.Text.Encoding]::UTF8.GetBytes($SsmlContent)
+
+    try {
+        Invoke-WebRequest -Uri $Endpoint -Method Post -Headers $headers -Body $utf8Body -OutFile $audioFile -ErrorAction Stop
+        Write-Host "Created audio file for slide ${SlideIdx}"
+    } catch {
+        Write-Error "Failed to generate audio for slide ${SlideIdx}: $_"
+    }
     Remove-Variable PlainKey
-    Write-Host "Created audio file for slide $SlideIdx"
     return $audioFile
 }
 
@@ -196,7 +204,6 @@ function Export-PresentationToVideo {
 
 ### run steps
 $ppt = New-Object -ComObject PowerPoint.Application
-$ppt.Visible = $true
 $presentation = $ppt.Presentations.Open($PptxFile)
 
 $notes = Get-SlideNotes -Presentation $presentation
@@ -212,9 +219,9 @@ foreach ($note in $notes) {
     $duration = Get-AudioDuration -AudioFile $audioFile
     $durations[$idx] = $duration
 
-    Set-Content -Path (Join-Path $DebugOutputDir ("{0:D3}_notes.txt" -f $idx)) -Value $text
-    Set-Content -Path (Join-Path $DebugOutputDir ("{0:D3}_ssml.xml" -f $idx)) -Value $ssml
-    Set-Content -Path (Join-Path $DebugOutputDir ("{0:D3}_duration.txt" -f $idx)) -Value $duration
+    Set-Content -Path (Join-Path $DebugOutputDir ("{0:D3}_notes.txt" -f $idx)) -Value $text -Encoding UTF8
+    Set-Content -Path (Join-Path $DebugOutputDir ("{0:D3}_ssml.xml" -f $idx)) -Value $ssml -Encoding UTF8
+    Set-Content -Path (Join-Path $DebugOutputDir ("{0:D3}_duration.txt" -f $idx)) -Value $duration -Encoding UTF8
 }
 
 Embed-Audio-And-Transition -Presentation $presentation -AudioFolder $AudioOutputDir -SlideDurations $durations
@@ -226,15 +233,12 @@ $dirName  = [System.IO.Path]::GetDirectoryName($PptxFile)
 $newFile = Join-Path $dirName ($baseName + "_with_audio.pptx")
 $videoFile = Join-Path $dirName ($baseName + "_with_audio.mp4")
 
-
-#$newFile = [System.IO.Path]::ChangeExtension($PptxFile, $null) + "_with_audio.pptx"
 $ppt.Activate()
 Start-Sleep -Seconds 2
 
 $presentation.SaveAs($newFile)
 Write-Host "Saved new PPTX: $newFile"
 
-#$videoFile = [System.IO.Path]::ChangeExtension($newFile, ".mp4")
 Export-PresentationToVideo -Presentation $presentation -OutputFile $videoFile
 
 $presentation.Close()

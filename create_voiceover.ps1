@@ -42,19 +42,71 @@ function Get-PlainResourceKey {
 function Get-SlideNote {
     param([object]$Slide)
 
-    $noteText = ""
-    try {
-        $notesPage = $Slide.NotesPage
-        foreach ($shape in $notesPage.Shapes) {
-            if ($shape.Type -eq 14 -and $shape.TextFrame -and $shape.TextFrame.HasText) {
-                $noteText = $shape.TextFrame.TextRange.Text.Trim()
-                break
+    $np = $null
+    try { $np = $Slide.NotesPage } catch { return "" }
+    if (-not $np) { return "" }
+
+    $raw = ""
+
+    # Option 1: standard
+    $ph = $null
+    try { $ph = $np.Shapes.Placeholders(2) } catch { $ph = $null }
+
+    if ($ph) {
+        try {
+            if ($ph.TextFrame2 -and $ph.TextFrame2.TextRange) {
+                $raw = $ph.TextFrame2.TextRange.Text
             }
+        } catch {}
+        if (-not $raw) {
+            try {
+                if ($ph.TextFrame -and $ph.TextFrame.HasText) {
+                    $raw = $ph.TextFrame.TextRange.Text
+                }
+            } catch {}
         }
-    } catch {
-        Write-Warning ("Failed to extract notes for slide {0}: {1}" -f $Slide.SlideIndex, $_)
     }
-    return $noteText
+
+    # Option 2: all shapes with text from NotesPage
+    if (-not $raw) {
+        $collected = @()
+        foreach ($shape in $np.Shapes) {
+            $t = $null
+            try {
+                if ($shape.TextFrame2 -and $shape.TextFrame2.TextRange) {
+                    $t = $shape.TextFrame2.TextRange.Text
+                }
+            } catch {}
+            if (-not $t) {
+                try {
+                    if ($shape.TextFrame -and $shape.TextFrame.HasText) {
+                        $t = $shape.TextFrame.TextRange.Text
+                    }
+                } catch {}
+            }
+            if ($t) { $collected += $t }
+        }
+        if ($collected.Count -gt 0) {
+            $raw = ($collected -join "`n")
+        }
+    }
+
+    if (-not $raw) { return "" }
+
+    # normalize
+    # VT (0x0B) & FF (0x0C) -> Newline
+    $raw = $raw -replace "[\x0B\x0C]", "`n"
+    # C0- (except CR/LF/TAB) -> Space
+    $raw = $raw -replace "[\x00-\x08\x0E-\x1F]", " "
+    # NBSP  -> Space
+    $raw = $raw -replace "[\u00A0\u2007\u202F]", " "
+    # line breacks
+    $raw = $raw -replace "`r`n", "`n"
+    $raw = $raw -replace "`r", "`n"
+    # multiple spaces
+    $raw = $raw -replace "(\n){3,}", "`n`n"
+
+    return $raw.Trim()
 }
 
 function Convert-TextToSSML {
@@ -216,6 +268,7 @@ for ($i = 1; $i -le $presentation.Slides.Count; $i++) {
     Set-Content -Path (Join-Path $DebugOutputDir ("{0:D3}_duration.txt" -f $i)) -Value $duration -Encoding UTF8
 
     Embed-Audio-To-Slide -Slide $slide -AudioPath $audioFile | Out-Null
+
     Set-Transition -Slide $slide -DurationSeconds $duration
 }
 
